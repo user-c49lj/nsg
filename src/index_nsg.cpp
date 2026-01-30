@@ -44,6 +44,20 @@ void IndexNSG::Save(const char *filename) {
   out.close();
 }
 
+void IndexNSG::SaveOOD(const char *filename) {
+    std::ofstream out(filename);
+    if (!out.is_open()) {
+        std::cerr << "Error: Could not open OOD output file: " << filename << std::endl;
+        return;
+    }
+    
+    // 1 for out-of-distribution query, 0 for in-distribution query
+    for (size_t i = 0; i < ood_labels_.size(); ++i) {
+        out << ood_labels_[i] << "\n";
+    }
+    out.close();
+}
+
 void IndexNSG::Load(const char *filename) {
   std::ifstream in(filename, std::ios::binary);
   in.read((char *)&width, sizeof(unsigned));
@@ -402,6 +416,11 @@ void IndexNSG::Link(const Parameters &parameters, SimpleNeighbor *cut_graph_) {
 void IndexNSG::Build(size_t n, const float *data, const Parameters &parameters) {
   std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
   unsigned range = parameters.Get<unsigned>("R");
+
+  unsigned seed_offset = parameters.Get<unsigned>("seed_offset");
+  float ood_threshold = parameters.Get<float>("ood_threshold");
+  bool classify_ood = parameters.Get<bool>("classify_ood");
+
   Load_nn_graph(nn_graph_path.c_str());
   data_ = data;
   init_graph(parameters);
@@ -409,22 +428,76 @@ void IndexNSG::Build(size_t n, const float *data, const Parameters &parameters) 
   Link(parameters, cut_graph_);
   final_graph_.resize(nd_);
 
+  std::vector<float> avg_neighbor_dist(nd_, 0.0f); 
+
   for (size_t i = 0; i < nd_; i++) {
     SimpleNeighbor *pool = cut_graph_ + i * (size_t)range;
-    unsigned pool_size = 0;
+    
+    unsigned pool_size = 0;    
+    unsigned neighbor_count = 0;
+    double total_dist = 0.0;
+
     for (unsigned j = 0; j < range; j++) {
       if (pool[j].distance == -1) break;
+      if (pool[j].id < seed_offset) {
+        total_dist += pool[j].distance;
+        neighbor_count++;
+      }
       pool_size = j;
     }
-    pool_size++;
+    pool_size ++;
+
+    if (classify_ood) {
+      if (neighbor_count > 0) {
+          avg_neighbor_dist[i] = (float)(total_dist / neighbor_count);
+      } else {
+          avg_neighbor_dist[i] = 0.0f; 
+      }
+    }
+
     final_graph_[i].resize(pool_size);
     for (unsigned j = 0; j < pool_size; j++) {
       final_graph_[i][j] = pool[j].id;
     }
   }
 
+
   tree_grow(parameters);
 
+  if (classify_ood) {
+    ood_labels_.resize(nd_, 0);  // default is in-distribution (0)
+
+    for (unsigned i = seed_offset+1; i < nd_; i++) {
+        float d_query = avg_neighbor_dist[i];
+
+        double sum_neighbor_avgs = 0.0;
+        unsigned neighbor_count = 0;
+
+        for (unsigned neighbor_id : final_graph_[i]) {
+            if (neighbor_id < avg_neighbor_dist.size() && neighbor_id < seed_offset) {
+                sum_neighbor_avgs += avg_neighbor_dist[neighbor_id];
+                neighbor_count++;
+            }
+        }
+
+        float d_neighbors_of_neighbors = (neighbor_count > 0) 
+                                          ? (float)(sum_neighbor_avgs / neighbor_count) 
+                                          : 0.0f;
+        
+        std::cout << "Query " << i << ": d_query = " << d_query 
+                  << ", d_neighbors_of_neighbors = " << d_neighbors_of_neighbors << std::endl;
+        bool is_ood = (d_query > (d_neighbors_of_neighbors * (1.0f + ood_threshold)));
+
+        if (d_query == 0.0f) {
+            is_ood = true; // If query-data distance is 0, then query is not connected, so its ood.
+        }
+        
+        ood_labels_[i] = is_ood ? 1 : 0;
+    }
+
+    
+  }
+  
   unsigned max = 0, min = 1e6, avg = 0;
   for (size_t i = 0; i < nd_; i++) {
     auto size = final_graph_[i].size();
@@ -436,7 +509,7 @@ void IndexNSG::Build(size_t n, const float *data, const Parameters &parameters) 
   printf("Degree Statistics: Max = %d, Min = %d, Avg = %d\n", max, min, avg);
 
   has_built = true;
-  delete cut_graph_;
+  delete[] cut_graph_; // Note: Added [] for correct array deletion
 }
 
 void IndexNSG::Search(const float *query, const float *x, size_t K,

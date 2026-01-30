@@ -27,11 +27,12 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.close();
 }
 int main(int argc, char** argv) {
-  if (argc != 7) {
-    std::cout << argv[0] << " data_file nn_graph_path L R C save_graph_file"
+  if (argc != 11) {
+    std::cout << argv[0] << " data_file nn_graph_path L R C seed_offset ood_threshold save_graph_file ood_file"
               << std::endl;
     exit(-1);
   }
+
   float* data_load = NULL;
   unsigned points_num, dim;
   load_data(argv[1], data_load, points_num, dim);
@@ -40,6 +41,9 @@ int main(int argc, char** argv) {
   unsigned L = (unsigned)atoi(argv[3]);
   unsigned R = (unsigned)atoi(argv[4]);
   unsigned C = (unsigned)atoi(argv[5]);
+  unsigned seed_offset = (unsigned)atoi(argv[6]);
+  float ood_threshold = atof(argv[7]);
+  bool classify_ood = atoi(argv[10]) != 0;
 
   // data_load = efanna2e::data_align(data_load, points_num, dim);//one must
   // align the data before build
@@ -50,14 +54,22 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
+  paras.Set<unsigned>("seed_offset", seed_offset);
+  paras.Set<float>("ood_threshold", ood_threshold);
+  paras.Set<bool>("classify_ood", classify_ood);
   paras.Set<std::string>("nn_graph_path", nn_graph_path);
 
   index.Build(points_num, data_load, paras);
+
   auto e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
 
   std::cout << "indexing time: " << diff.count() << "\n";
-  index.Save(argv[6]);
+  index.Save(argv[8]);
+
+  if (classify_ood) {
+    index.SaveOOD(argv[9]);
+  }
 
   return 0;
 }

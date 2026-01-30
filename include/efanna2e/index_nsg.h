@@ -24,6 +24,7 @@ class IndexNSG : public Index {
   virtual void Save(const char *filename)override;
   virtual void Load(const char *filename)override;
 
+  void SaveOOD(const char *filename);
 
   virtual void Build(size_t n, const float *data, const Parameters &parameters) override;
 
@@ -46,6 +47,8 @@ class IndexNSG : public Index {
     typedef std::vector<nhood> KNNGraph;
 
     CompactGraph final_graph_;
+
+    std::vector<int> ood_labels_;
 
     Index *initializer_ = nullptr;
     void init_graph(const Parameters &parameters);
